@@ -1,0 +1,21 @@
+services:
+  walle-memory:
+    build:
+      context: .
+      dockerfile: walle-memory-server/Dockerfile
+    image: iregistry.baidu-int.com/acg-agi/walle-memory:latest
+    platform: linux/amd64
+    ports:
+      - "3800:3800"
+    volumes:
+      - /data/walle-memory:/app/data
+    environment:
+      - DB_PATH=/app/data/memory.db
+      - PORT=3800
+      - API_KEY=${WALLE_MEMORY_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3800/health').then(r=>process.exit(r.ok?0:1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
