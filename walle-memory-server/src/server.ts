@@ -7,6 +7,7 @@ import {
   listKeys,
   searchKeys,
 } from './store.js';
+import { getDashboardHtml } from './dashboard.js';
 
 const API_KEY = process.env.API_KEY;
 
@@ -38,6 +39,13 @@ export function createMemoryServer(): ReturnType<typeof createServer> {
     const url = new URL(req.url ?? '/', `http://localhost`);
     const pathname = url.pathname;
     const method = req.method ?? 'GET';
+
+    // GET /  — dashboard (unauthenticated; JS side handles the API key)
+    if (method === 'GET' && pathname === '/') {
+      const html = getDashboardHtml();
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });
+      return res.end(html);
+    }
 
     // GET /health  — unauthenticated, used by docker healthcheck
     if (method === 'GET' && pathname === '/health') {
