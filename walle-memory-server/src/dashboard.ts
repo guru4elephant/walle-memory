@@ -33,7 +33,8 @@ body { font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(-
 .key-item .key-desc { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 #toolbar { padding: 10px 16px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; background: var(--surface); }
-#toolbar h1 { font-size: 15px; font-weight: 600; flex: 1; }
+#toolbar h1 { font-size: 15px; font-weight: 600; }
+#tenant-badge { font-size: 12px; padding: 3px 9px; border-radius: 20px; background: oklch(92% 0.06 250); color: oklch(38% 0.18 250); font-weight: 500; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
 button { padding: 6px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); font: inherit; cursor: pointer; background: var(--surface); color: var(--text); }
 button:hover { background: var(--surface2); }
 button.primary { background: var(--accent); color: #fff; border-color: transparent; }
@@ -62,8 +63,10 @@ textarea.value-area { min-height: 160px; font-family: ui-monospace, monospace; f
 <div id="main">
   <div id="toolbar">
     <h1>walle-memory</h1>
+    <span id="tenant-badge"></span>
     <button id="btn-new" class="primary">+ New</button>
     <button id="btn-refresh">Refresh</button>
+    <button id="btn-switch">Switch Tenant</button>
   </div>
   <div id="detail">
     <div id="empty">
@@ -105,6 +108,17 @@ function toast(msg) {
 function ts(epoch) {
   if (!epoch) return '—';
   return new Date(epoch).toLocaleString();
+}
+
+async function loadTenant() {
+  try {
+    const res = await api('GET', '/summary');
+    if (res.ok) {
+      const data = await res.json();
+      const badge = $('tenant-badge');
+      if (badge && data.tenant) badge.textContent = data.tenant;
+    }
+  } catch {}
 }
 
 async function loadKeys(query) {
@@ -223,13 +237,25 @@ $('btn-new').onclick = () => {
 
 $('btn-refresh').onclick = () => loadKeys($('search').value.trim());
 
+$('btn-switch').onclick = () => {
+  if (dirty && !confirm('Discard unsaved changes?')) return;
+  localStorage.removeItem('walle_api_key');
+  apiKey = '';
+  currentKey = null;
+  dirty = false;
+  const badge = $('tenant-badge');
+  if (badge) badge.textContent = '';
+  $('detail').innerHTML = '<div id="empty" style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);flex-direction:column;gap:10px"><span>Select a key or create a new one</span></div>';
+  loadTenant().then(() => loadKeys(''));
+};
+
 let searchTimer;
 $('search').addEventListener('input', e => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => loadKeys(e.target.value.trim()), 300);
 });
 
-loadKeys('');
+loadTenant().then(() => loadKeys(''));
 </script>
 </body>
 </html>`;
