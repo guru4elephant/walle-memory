@@ -6,6 +6,7 @@ import {
   deleteEntry,
   listKeys,
   searchKeys,
+  deleteExpired,
 } from './store.js';
 import { getDashboardHtml } from './dashboard.js';
 
@@ -54,6 +55,12 @@ export function createMemoryServer(): ReturnType<typeof createServer> {
 
     if (!auth(req, res)) return;
 
+    // POST /memory/gc  — delete all expired entries
+    if (method === 'POST' && pathname === '/memory/gc') {
+      const count = deleteExpired();
+      return send(res, 200, { ok: true, deleted: count });
+    }
+
     // GET /memory  — list keys (optional ?prefix=)
     if (method === 'GET' && pathname === '/memory') {
       const prefix = url.searchParams.get('prefix') ?? undefined;
@@ -85,11 +92,12 @@ export function createMemoryServer(): ReturnType<typeof createServer> {
         } catch {
           return send(res, 400, { error: 'invalid JSON' });
         }
-        const { value, description } = body as Record<string, unknown>;
+        const { value, description, ttl_seconds } = body as Record<string, unknown>;
         if (typeof value !== 'string' || typeof description !== 'string') {
           return send(res, 400, { error: 'body must have string fields: value, description' });
         }
-        upsert(key, value, description);
+        const ttl = typeof ttl_seconds === 'number' && ttl_seconds > 0 ? ttl_seconds : undefined;
+        upsert(key, value, description, ttl);
         return send(res, 200, { ok: true, key });
       }
 

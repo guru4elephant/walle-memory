@@ -131,8 +131,9 @@ function renderList() {
   keys.forEach(k => {
     const div = document.createElement('div');
     div.className = 'key-item' + (currentKey === k.key ? ' active' : '');
+    const expiry = k.expires_at ? ' · expires ' + ts(k.expires_at) : '';
     div.innerHTML = '<div class="key-name">' + esc(k.key) + '</div>' +
-      '<div class="key-desc">' + esc(k.description || '') + '</div>';
+      '<div class="key-desc">' + esc(k.description || '') + expiry + '</div>';
     div.onclick = () => selectKey(k.key);
     list.appendChild(div);
   });
@@ -166,7 +167,10 @@ function renderDetail(entry, isNew) {
     '<textarea id="f-val" class="value-area">' + esc(entry.value ?? '') + '</textarea></div>' +
     (!isNew ? '<div class="meta-row"><span>Updated: ' + ts(entry.updated_at) + '</span>' +
       '<span>Accessed: ' + entry.access_count + ' times</span>' +
-      '<span>Last access: ' + ts(entry.last_accessed_at) + '</span></div>' : '') +
+      '<span>Last access: ' + ts(entry.last_accessed_at) + '</span>' +
+      '<span>Expires: ' + (entry.expires_at ? ts(entry.expires_at) : 'never') + '</span></div>' : '') +
+    '<div class="field"><label>TTL (seconds, blank = permanent)</label>' +
+    '<input id="f-ttl" type="number" min="1" placeholder="e.g. 86400 for 1 day" value=""></div>' +
     '<div style="display:flex;gap:8px;margin-top:16px">' +
     '<button id="btn-save" class="primary">Save</button>' +
     (!isNew ? '<button id="btn-del" class="danger">Delete</button>' : '') +
@@ -186,7 +190,10 @@ async function saveEntry() {
   const description = $('f-desc').value.trim();
   if (!key) { toast('Key is required'); return; }
   if (!description) { toast('Description is required'); return; }
-  const res = await api('POST', '/memory/' + encodeURIComponent(key), { value, description });
+  const ttlRaw = $('f-ttl') ? $('f-ttl').value.trim() : '';
+  const body = { value, description };
+  if (ttlRaw) body.ttl_seconds = parseInt(ttlRaw, 10);
+  const res = await api('POST', '/memory/' + encodeURIComponent(key), body);
   if (!res.ok) { toast('Save failed'); return; }
   dirty = false;
   currentKey = key;
