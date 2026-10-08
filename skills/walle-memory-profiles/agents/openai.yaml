@@ -1,0 +1,4 @@
+interface:
+  display_name: "Walle 多用户记忆"
+  short_description: "按明确用户名选择本机 Keychain 空间密钥，管理 Walle 多用户记忆内容"
+  default_prompt: "使用 $walle-memory-profiles 管理我明确指定用户名的 Walle 记忆，先检查该 profile 是否已配置。"

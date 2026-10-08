@@ -50,7 +50,10 @@ db.exec(`
     VALUES ('delete', old.rowid, old.key, old.description);
   END;
 
-  CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON memory BEGIN
+  DROP TRIGGER IF EXISTS memory_au;
+  CREATE TRIGGER memory_au AFTER UPDATE OF key, description ON memory
+  WHEN old.key IS NOT new.key OR old.description IS NOT new.description
+  BEGIN
     INSERT INTO memory_fts(memory_fts, rowid, key, description)
     VALUES ('delete', old.rowid, old.key, old.description);
     INSERT INTO memory_fts(rowid, key, description)
@@ -147,9 +150,9 @@ const stmtList = db.prepare<[number, string], KeySummary>(
   `SELECT key, description, updated_at, expires_at FROM memory
    WHERE ${LIVE} AND tenant_id = ? ORDER BY access_count DESC, updated_at DESC`
 );
-const stmtListPrefix = db.prepare<[number, string, string], KeySummary>(
+const stmtListPrefix = db.prepare<[number, string, string, string], KeySummary>(
   `SELECT key, description, updated_at, expires_at FROM memory
-   WHERE ${LIVE} AND tenant_id = ? AND key LIKE ? ORDER BY access_count DESC, updated_at DESC`
+   WHERE ${LIVE} AND tenant_id = ? AND substr(key, 1, length(?)) = ? ORDER BY access_count DESC, updated_at DESC`
 );
 const stmtSearch = db.prepare<[number, string, string], { key: string; description: string }>(
   `SELECT m.key, m.description FROM memory_fts f
@@ -157,8 +160,8 @@ const stmtSearch = db.prepare<[number, string, string], { key: string; descripti
    WHERE ${LIVE} AND m.tenant_id = ? AND memory_fts MATCH ?
    LIMIT 20`
 );
-const stmtDeleteExpired = db.prepare<[number]>(
-  `DELETE FROM memory WHERE expires_at IS NOT NULL AND expires_at <= ?`
+const stmtDeleteExpired = db.prepare<[string, number]>(
+  `DELETE FROM memory WHERE tenant_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`
 );
 const stmtGetMeta = db.prepare<[string], { value: string }>(
   `SELECT value FROM meta WHERE key = ?`
@@ -194,9 +197,13 @@ export function listTenants(): Tenant[] {
   return stmtListTenants.all() as Tenant[];
 }
 
+const deleteTenantTransaction = db.transaction((id: string): boolean => {
+  db.prepare('DELETE FROM memory WHERE tenant_id = ?').run(id);
+  return stmtDeleteTenant.run(id).changes > 0;
+});
+
 export function deleteTenant(id: string): boolean {
-  const info = stmtDeleteTenant.run(id);
-  return info.changes > 0;
+  return deleteTenantTransaction(id);
 }
 
 // ── Memory functions ──────────────────────────────────────────────────────────
@@ -224,7 +231,7 @@ export function deleteEntry(tenantId: string, key: string): boolean {
 export function listKeys(tenantId: string, prefix?: string): KeySummary[] {
   const now = Date.now();
   if (prefix) {
-    return stmtListPrefix.all(now, tenantId, `${prefix}%`);
+    return stmtListPrefix.all(now, tenantId, prefix, prefix);
   }
   return stmtList.all(now, tenantId);
 }
@@ -237,8 +244,8 @@ export function getAllDescriptions(tenantId: string): KeySummary[] {
   return stmtAllDescriptions.all(Date.now(), tenantId);
 }
 
-export function deleteExpired(): number {
-  const info = stmtDeleteExpired.run(Date.now());
+export function deleteExpired(tenantId: string): number {
+  const info = stmtDeleteExpired.run(tenantId, Date.now());
   return info.changes;
 }
 

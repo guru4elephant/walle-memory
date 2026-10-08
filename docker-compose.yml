@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: walle-memory-server/Dockerfile
-    image: iregistry.baidu-int.com/acg-agi/walle-memory:latest
+    image: ${WALLE_MEMORY_IMAGE:-walle-memory:local}
     platform: linux/amd64
     ports:
       - "3800:3800"

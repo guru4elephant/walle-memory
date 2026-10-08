@@ -1,172 +1,113 @@
 # walle-memory
 
-A self-hosted, multi-tenant memory service for AI agents.
+A self-hosted memory service for AI agents, with two deployment targets:
 
-Deploy once. Any agent, CLI, or desktop client that can make an HTTP request can
-read and write the same memory store — across machines, sessions, and tools.
-Tenants are isolated by API key, so personal memory stays separate from team
-memory, and different projects can share the same instance without stepping on
-each other.
+| Target | Runtime and storage | Identity and management |
+| --- | --- | --- |
+| [Docker / Node](walle-memory-server/) | Node 22, SQLite, `better-sqlite3` | Administrator-created tenants and tenant API keys. |
+| [Cloudflare Workers](walle-memory-worker/README.md) | Workers, D1, Web Crypto | Existing tenants plus accounts, owned memory spaces, scoped keys, and optional invitation registration. |
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    walle-memory (cloud)                 │
-│                                                         │
-│  tenant: alice          tenant: team-alpha              │
-│  ┌──────────────┐       ┌──────────────────────────┐   │
-│  │ user/prefs/… │       │ project/roadmap/…        │   │
-│  │ context/…    │       │ context/last-standup/…   │   │
-│  └──────────────┘       └──────────────────────────┘   │
-└────────────────────┬────────────────────────────────────┘
-                     │  REST API  (X-Api-Key per tenant)
-        ┌────────────┼────────────────┐
-        │            │                │
-   Claude Code    agent loop     desktop app
-   (any machine)  (any runtime)  (any OS)
-```
+Both targets provide the memory API and dashboard at `/`. The Worker additionally provides `/account` for login, space management, and key issuance. Its default registration mode allows administrators to create accounts; setting `REGISTRATION_MODE=invite` allows registration with a valid invitation. Accounts and D1 migrations are specific to the Worker target.
 
-## What it is
+Each key selects one tenant or space. Clients can share a store across machines and sessions, while separate keys keep personal, team, and project stores apart. The administrator key manages resources through `/admin/`; it is not a memory key. See [accounts and spaces](docs/ACCOUNTS_AND_SPACES.md), [invitation registration](docs/INVITATION_SIGNUP.md), and [release provenance](docs/RELEASE_PROVENANCE.md).
 
-walle-memory stores named key/value pairs with one-line descriptions. The
-descriptions are the point: every call to `GET /memory` returns only keys and
-descriptions, so an agent can inject the full index into a system prompt and
-decide which values to fetch — without reading everything up front.
+## Memory model
 
-The service does not call any LLM. There is no model API key, no
-embeddings, and no summarization. All of that is the caller's job. This service
-stays deliberately thin so it works equally well with Claude Code, a custom
-Python agent, a mobile app, or a cron job.
+Entries have a named key, a string value, and a short description. List and summary responses contain keys and descriptions so an agent can choose which values to fetch. `/summary` returns this index; the service does not call an LLM, generate summaries, create embeddings, or require a model API key.
 
-## Why multi-tenant
+Use keys such as `user/prefs/theme`, `project/alpha/goal`, or `context/work/current-task`. Prefixes organize entries; they do not grant a separate permission boundary within a space. Describe what an entry contains, for example `UI theme preference`, rather than repeating its value `dark`.
 
-A single deployment can serve many isolated tenants at once:
+## Shared API
 
-- **Personal vs. team** — your own memory (preferences, context, notes) lives in
-  your tenant; a shared project's memory lives in a separate tenant with its own
-  key that teammates can hold.
-- **Agent vs. human** — give an automated agent its own tenant so its writes
-  can't pollute your personal store.
-- **Staging vs. production** — run one server, use separate tenant keys per
-  environment.
-
-Tenants are created via an admin API. The raw API key is returned exactly once;
-after that only its SHA-256 hash is stored.
-
-## API overview
-
-### Admin routes (require `API_KEY` env var as `X-Api-Key`)
+All paths below are relative to your deployment origin. Deployment hosts and credentials in examples are placeholders. Memory routes require a tenant key or, on Workers, a space key in `X-Api-Key`.
 
 | Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/admin/tenants` | Create tenant. Body: `{ name }`. Returns one-time `api_key`. |
-| `GET` | `/admin/tenants` | List all tenants (no keys, only metadata). |
-| `DELETE` | `/admin/tenants/:id` | Delete tenant and all its data. |
+| --- | --- | --- |
+| `GET` | `/summary` | Tenant/space name and live key-description index. |
+| `GET` | `/memory` | Live keys; optional `?prefix=user/` filter. |
+| `GET` | `/memory/search?q=...` | FTS5 search of keys and descriptions, up to 20 results. |
+| `GET` | `/memory/:key` | Read one entry and update its access count. |
+| `POST` / `PUT` | `/memory/:key` | Create or replace `{value, description, ttl_seconds?}`. |
+| `DELETE` | `/memory/:key` | Delete one entry. |
+| `POST` | `/memory/gc` | Delete expired entries belonging to the caller. |
+| `GET` | `/` | Browser memory dashboard. |
+| `GET` | `/health` | Public liveness check. |
 
-### Per-tenant routes (require tenant `X-Api-Key`)
+Encode a memory key as one URL path component. The `GET /memory/search` and `POST /memory/gc` routes have special meanings; avoid `search` or `gc` as standalone memory keys. Values and descriptions are strings; writes replace both fields. A positive `ttl_seconds` expires an entry after that interval. Omitting TTL on an update removes its previous expiry. Expired entries are hidden from reads, lists, search, and summary until GC removes them. Times use Unix milliseconds, and an absent expiry is `null`.
+
+The targets have some input-validation differences; consult the [Worker guide](walle-memory-worker/README.md#security-and-compatibility-differences) before moving an existing client.
+
+### Tenant administration
+
+Both targets support these routes with the administrator `API_KEY` in `X-Api-Key`. With no configured key, administrator routes return 503; with an incorrect or missing key, they return 401.
 
 | Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/summary` | All key+description pairs — designed for system prompt injection. |
-| `GET` | `/memory` | List keys. Optional `?prefix=user/` filter. |
-| `GET` | `/memory/search?q=` | Full-text search over keys and descriptions. |
-| `GET` | `/memory/:key` | Read one entry (bumps access count). |
-| `POST` | `/memory/:key` | Write or update. Body: `{ value, description, ttl_seconds? }`. |
-| `DELETE` | `/memory/:key` | Remove an entry. |
-| `POST` | `/memory/gc` | Delete all expired entries for this tenant. |
-| `GET` | `/` | Web dashboard (API key handled client-side). |
-| `GET` | `/health` | Liveness check. Always unauthenticated. |
+| --- | --- | --- |
+| `POST` | `/admin/tenants` | Create `{name}`; return a tenant and its one-time `api_key`. |
+| `GET` | `/admin/tenants` | List tenant metadata without key material. |
+| `DELETE` | `/admin/tenants/:id` | Delete a tenant and all of its memory. |
 
-### TTL (short-term memory)
+Tenant API keys are random 24-byte values. Only SHA-256 hashes are stored, and the creation response reveals the raw key once. The Worker adds scoped keys with `read`, `write`, `delete`, and `gc` permissions, expiry, and revocation.
 
-Pass `ttl_seconds` on any write. The entry expires silently after that many
-seconds. Useful for session context, temporary flags, or anything you want to
-forget automatically.
+```http
+POST /admin/tenants
+Content-Type: application/json
+X-Api-Key: <ADMIN_KEY>
 
-```
-3600    → 1 hour
-86400   → 1 day
-604800  → 1 week
-        → omit for permanent
+{"name":"example-tenant"}
 ```
 
-## Key naming convention
+Save a newly returned key privately. Do not include real keys in commands, repository files, ordinary chat, or logs. The browser dashboard at `/` stores its entered memory key in same-origin localStorage; use it only on a trusted device and origin. Use `/account` to manage Worker accounts and scoped keys.
 
-`namespace/topic/subtopic`, for example:
+## Run the Docker / Node target
 
-```
-user/prefs/theme
-user/prefs/language
-project/alpha/goal
-project/alpha/last-standup
-context/work/current-task
-```
+The Dockerfile uses Node 22. Compose builds a local image by default, mounts `/data/walle-memory` on the host into `/app/data`, and maps port 3800. Review those paths and set `WALLE_MEMORY_IMAGE` if you use your own registry image.
 
-## The `description` field
-
-This is what makes the index useful. It tells an agent *what kind of
-information* a key holds, so it can decide whether to fetch the full value
-without reading everything.
-
-- Good: `"用户 UI 主题偏好，影响所有渲染"`
-- Bad: `"dark"` — that is the value, not a description of it
-
-## Run
+Set the Compose administrator variable yourself. For example, in an interactive Bash terminal, this prompts without putting the key into a command argument or shell history:
 
 ```bash
-# First run — create the data directory and start
+read -r -s -p 'Admin API key: ' WALLE_MEMORY_API_KEY
+export WALLE_MEMORY_API_KEY
 mkdir -p /data/walle-memory
-API_KEY=your-admin-key docker compose up -d
-
-# Create your first tenant
-curl -X POST https://your-host/admin/tenants \
-  -H "X-Api-Key: your-admin-key" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "alice"}'
-# → { "tenant": {...}, "api_key": "...48-char hex, save this..." }
+docker compose up -d --build
 ```
 
-The SQLite database lives in `/app/data/memory.db` inside the container,
-mounted from the host — so it survives restarts and a backup is just a file
-copy.
+Open `/` on your deployment host. Create tenants using the administrator API; there is no account page in this target. Missing `WALLE_MEMORY_API_KEY` leaves administrator routes closed.
 
-### Build and push
+To build an image for your own registry, replace the registry placeholder:
 
-```bash
-# From repo root (Dockerfile path is relative to root)
+```sh
 docker build --platform linux/amd64 \
   -f walle-memory-server/Dockerfile \
-  -t your-registry/walle-memory:latest .
-docker push your-registry/walle-memory:latest
+  -t "<YOUR_REGISTRY>/walle-memory:latest" .
+docker push "<YOUR_REGISTRY>/walle-memory:latest"
 ```
 
-### Pull and run on a remote host
+For local development, use Node 22 and a local-only administrator value supplied through `API_KEY` in your environment:
 
-```bash
-API_KEY=your-admin-key docker compose pull
-API_KEY=your-admin-key docker compose up -d --no-build
-```
-
-### Local development
-
-```bash
+```sh
 cd walle-memory-server
-npm install
+npm ci
 npm run build
 DB_PATH=./data/memory.db PORT=3800 npm start
 ```
 
-## Environment variables
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
+| Node environment variable | Default | Purpose |
+| --- | --- | --- |
 | `PORT` | `3800` | HTTP listen port. |
-| `DB_PATH` | `walle-memory-server/data/memory.db` | SQLite file location. |
-| `API_KEY` | *(unset)* | Admin key. If unset, `/admin/` routes are open. |
+| `DB_PATH` | `walle-memory-server/data/memory.db` | SQLite file. |
+| `API_KEY` | Unset | Administrator key; Compose supplies it from `WALLE_MEMORY_API_KEY`. |
 
-## Storage
+The Node target uses a SQLite file in WAL mode, FTS5 triggers, and startup schema initialization. Use a SQLite-consistent backup method; copying only the main file while writes are active can omit WAL data. D1 migration files do not apply to this database.
 
-Single SQLite file, WAL mode. Each memory entry tracks `access_count` and
-`last_accessed_at` so agents can rank by recency or frequency. An FTS5 virtual
-table (kept in sync by triggers) powers `/memory/search`. No migrations
-framework — schema is created with `IF NOT EXISTS` on startup; columns added
-in later versions are applied with `ALTER TABLE` at boot.
+## Run the Workers target
+
+Follow [walle-memory-worker/README.md](walle-memory-worker/README.md) for local D1 development, fresh deployment, and incremental migrations. Remote deployment requires your own Cloudflare account and database binding. The checked-in database ID is a placeholder; store the administrator key using the supported interactive Wrangler secrets flow.
+
+## Local Codex skill
+
+[`skills/walle-memory-profiles/`](skills/walle-memory-profiles/SKILL.md) contains a Python standard-library client that requires an explicit `--user` profile alias. Each alias references one space key in macOS Keychain. The server selects the space from that key; the alias is not an account identity or a cross-space access parameter. Missing profiles or credentials fail without selecting another user.
+
+The skill supports list, get, put, search, summary, delete, and expired-entry GC. Delete and GC require an explicit local target confirmation and their respective server scopes. It rejects redirects, key arguments, and plaintext credential fallbacks. See its [setup guide](skills/walle-memory-profiles/references/setup.md) for installation and user-entered Keychain enrollment. Installation alone does not configure profile mappings or authorize saving/using real keys. A local skill does not automatically become a cloud tool; other devices need access to a task running on the Mac or a separately configured connection.
+
+The repository includes 58 standard-library mock tests under [`tests/`](tests/) for profile isolation, credential failures, sanitization, Keychain behavior, and redirect refusal. They use synthetic credentials and local HTTP fixtures. [Validation commands](docs/VALIDATION.md) cover the two service targets and skill; run them in the stated runtimes before claiming a new result.

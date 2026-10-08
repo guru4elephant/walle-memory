@@ -50,7 +50,10 @@ function authTenant(req: IncomingMessage, res: ServerResponse): Tenant | undefin
 
 /** Returns true when the request carries the admin key. */
 function authAdmin(req: IncomingMessage, res: ServerResponse): boolean {
-  if (!ADMIN_KEY) return true;
+  if (!ADMIN_KEY?.trim()) {
+    send(res, 503, { error: 'admin API is not configured' });
+    return false;
+  }
   if (req.headers['x-api-key'] === ADMIN_KEY) return true;
   send(res, 401, { error: 'unauthorized' });
   return false;
@@ -122,9 +125,9 @@ export function createMemoryServer(): ReturnType<typeof createServer> {
     if (!tenant) return;
     const tenantId = tenant.id;
 
-    // POST /memory/gc  — delete all expired entries (global, admin-like but any tenant can call)
+    // POST /memory/gc  — delete only this tenant's expired entries
     if (method === 'POST' && pathname === '/memory/gc') {
-      const count = deleteExpired();
+      const count = deleteExpired(tenantId);
       return send(res, 200, { ok: true, deleted: count });
     }
 
