@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "profiles": {
+    "alice": {
+      "origin": "https://walle-memory.dongdaxiang.xyz",
+      "credential": {
+        "provider": "macos-keychain",
+        "service": "xyz.dongdaxiang.walle-memory.space-key.v1",
+        "account": "https://walle-memory.dongdaxiang.xyz|alice"
+      }
+    },
+    "bob": {
+      "origin": "https://walle-memory.dongdaxiang.xyz",
+      "credential": {
+        "provider": "macos-keychain",
+        "service": "xyz.dongdaxiang.walle-memory.space-key.v1",
+        "account": "https://walle-memory.dongdaxiang.xyz|bob"
+      }
+    }
+  }
+}

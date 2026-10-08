@@ -1,0 +1,4 @@
+# Local development placeholder only. Choose a local-only value; never commit .dev.vars.
+API_KEY=REPLACE_WITH_A_LOCAL_ONLY_ADMIN_KEY
+# Optional: invite enables invitation-only registration; admin is the default.
+REGISTRATION_MODE=admin

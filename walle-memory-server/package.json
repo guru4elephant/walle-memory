@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "test": "npm run build && node test/regression.test.mjs",
     "start": "node dist/index.js",
     "dev": "node --watch dist/index.js"
   },

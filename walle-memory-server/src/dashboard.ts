@@ -82,17 +82,26 @@ let apiKey = localStorage.getItem('walle_api_key') || '';
 let keys = [];
 let currentKey = null;
 let dirty = false;
+let tenantVersion = 0;
+let listVersion = 0;
+let detailVersion = 0;
+let saving = false;
 
-async function api(method, path, body) {
+async function api(method, path, body, retry = true) {
+  const version = tenantVersion;
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) headers['X-Api-Key'] = apiKey;
   const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  if (version !== tenantVersion) throw new Error('Tenant changed; request ignored');
   if (res.status === 401) {
+    // Never replay a mutation under a replacement tenant/space key.
+    if (method !== 'GET') throw new Error('API key no longer valid; switch tenant and retry explicitly');
+    if (!retry) throw new Error('Invalid API key');
     const key = prompt('Enter API key:');
     if (key === null) throw new Error('cancelled');
     apiKey = key;
     localStorage.setItem('walle_api_key', key);
-    return api(method, path, body);
+    return api(method, path, body, false);
   }
   return res;
 }
@@ -111,25 +120,29 @@ function ts(epoch) {
 }
 
 async function loadTenant() {
-  try {
-    const res = await api('GET', '/summary');
-    if (res.ok) {
-      const data = await res.json();
-      const badge = $('tenant-badge');
-      if (badge && data.tenant) badge.textContent = data.tenant;
-    }
-  } catch {}
+  const version = tenantVersion;
+  const res = await api('GET', '/summary');
+  if (!res.ok) throw new Error('Failed to load tenant');
+  const data = await res.json();
+  if (version !== tenantVersion) return;
+  const badge = $('tenant-badge');
+  if (badge && data.tenant) badge.textContent = data.tenant;
 }
 
 async function loadKeys(query) {
+  const version = ++listVersion;
   let res;
   if (query) {
     res = await api('GET', '/memory/search?q=' + encodeURIComponent(query));
+    if (!res.ok) { toast('Search failed; check the query'); return; }
     const data = await res.json();
+    if (version !== listVersion) return;
     keys = data.results ?? [];
   } else {
     res = await api('GET', '/memory');
+    if (!res.ok) { toast('Failed to load entries'); return; }
     const data = await res.json();
+    if (version !== listVersion) return;
     keys = data.keys ?? [];
   }
   renderList();
@@ -148,23 +161,26 @@ function renderList() {
     const expiry = k.expires_at ? ' · expires ' + ts(k.expires_at) : '';
     div.innerHTML = '<div class="key-name">' + esc(k.key) + '</div>' +
       '<div class="key-desc">' + esc(k.description || '') + expiry + '</div>';
-    div.onclick = () => selectKey(k.key);
+    div.onclick = () => run(() => selectKey(k.key));
     list.appendChild(div);
   });
 }
 
 function esc(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 async function selectKey(key) {
+  if (saving) return;
   if (dirty && !confirm('Discard unsaved changes?')) return;
   currentKey = key;
   dirty = false;
+  const version = ++detailVersion;
   renderList();
   const res = await api('GET', '/memory/' + encodeURIComponent(key));
   if (!res.ok) { toast('Failed to load entry'); return; }
   const entry = await res.json();
+  if (version !== detailVersion || currentKey !== key) return;
   renderDetail(entry, false);
 }
 
@@ -190,15 +206,17 @@ function renderDetail(entry, isNew) {
     (!isNew ? '<button id="btn-del" class="danger">Delete</button>' : '') +
     '</div>';
   detail.appendChild(form);
-  ['f-key','f-desc','f-val'].forEach(id => {
+  ['f-key','f-desc','f-val','f-ttl'].forEach(id => {
     const el = $(id);
     if (el) el.addEventListener('input', () => { dirty = true; });
   });
-  $('btn-save').onclick = saveEntry;
-  if (!isNew) $('btn-del').onclick = deleteEntry;
+  $('btn-save').onclick = () => run(saveEntry);
+  if (!isNew) $('btn-del').onclick = () => run(deleteEntry);
 }
 
 async function saveEntry() {
+  if (saving) return;
+  const version = detailVersion;
   const key = $('f-key').value.trim();
   const value = $('f-val').value;
   const description = $('f-desc').value.trim();
@@ -206,19 +224,29 @@ async function saveEntry() {
   if (!description) { toast('Description is required'); return; }
   const ttlRaw = $('f-ttl') ? $('f-ttl').value.trim() : '';
   const body = { value, description };
-  if (ttlRaw) body.ttl_seconds = parseInt(ttlRaw, 10);
-  const res = await api('POST', '/memory/' + encodeURIComponent(key), body);
+  if (ttlRaw) {
+    body.ttl_seconds = Number(ttlRaw);
+    if (!Number.isFinite(body.ttl_seconds) || body.ttl_seconds <= 0) { toast('TTL must be positive'); return; }
+  }
+  let res;
+  saving = true;
+  try { res = await api('POST', '/memory/' + encodeURIComponent(key), body); }
+  finally { saving = false; }
   if (!res.ok) { toast('Save failed'); return; }
   dirty = false;
   currentKey = key;
   toast('Saved');
   await loadKeys($('search').value.trim());
-  await selectKey(key);
+  if (version === detailVersion) await selectKey(key);
 }
 
 async function deleteEntry() {
+  if (saving) return;
   if (!confirm('Delete "' + currentKey + '"?')) return;
-  const res = await api('DELETE', '/memory/' + encodeURIComponent(currentKey));
+  let res;
+  saving = true;
+  try { res = await api('DELETE', '/memory/' + encodeURIComponent(currentKey)); }
+  finally { saving = false; }
   if (!res.ok) { toast('Delete failed'); return; }
   toast('Deleted');
   currentKey = null;
@@ -228,34 +256,50 @@ async function deleteEntry() {
 }
 
 $('btn-new').onclick = () => {
+  if (saving) return;
   if (dirty && !confirm('Discard unsaved changes?')) return;
   currentKey = null;
   dirty = false;
+  detailVersion++;
   renderList();
   renderDetail({ key: '', description: '', value: '' }, true);
 };
 
-$('btn-refresh').onclick = () => loadKeys($('search').value.trim());
+$('btn-refresh').onclick = () => run(() => loadKeys($('search').value.trim()));
 
 $('btn-switch').onclick = () => {
+  if (saving) return;
   if (dirty && !confirm('Discard unsaved changes?')) return;
   localStorage.removeItem('walle_api_key');
   apiKey = '';
   currentKey = null;
   dirty = false;
+  tenantVersion++;
+  listVersion++;
+  detailVersion++;
+  clearTimeout(searchTimer);
+  $('search').value = '';
+  keys = [];
+  renderList();
   const badge = $('tenant-badge');
   if (badge) badge.textContent = '';
   $('detail').innerHTML = '<div id="empty" style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);flex-direction:column;gap:10px"><span>Select a key or create a new one</span></div>';
-  loadTenant().then(() => loadKeys(''));
+  run(() => loadTenant().then(() => loadKeys('')));
 };
 
 let searchTimer;
 $('search').addEventListener('input', e => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => loadKeys(e.target.value.trim()), 300);
+  searchTimer = setTimeout(() => run(() => loadKeys(e.target.value.trim())), 300);
 });
 
-loadTenant().then(() => loadKeys(''));
+function run(action) {
+  return Promise.resolve().then(action).catch(error => {
+    if (error.message !== 'cancelled') toast(error.message || 'Request failed');
+  });
+}
+
+run(() => loadTenant().then(() => loadKeys('')));
 </script>
 </body>
 </html>`;
