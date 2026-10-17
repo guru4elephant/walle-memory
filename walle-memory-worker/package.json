@@ -6,16 +6,21 @@
   "scripts": {
     "dev": "wrangler dev --local",
     "typecheck": "tsc --noEmit",
-    "build": "wrangler deploy --dry-run --outdir dist",
+    "build": "npm run build:ui && wrangler deploy --dry-run --outdir dist",
     "test": "npm run typecheck && npm run build && node --test test/*.test.mjs",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "build:ui": "npm --prefix apps/workbench run build"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261001.1",
     "miniflare": "5.20260930.0-alpha",
     "typescript": "5.9.3",
     "wrangler": "4.145.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
+    "zod": "4.6.5"
   }
 }

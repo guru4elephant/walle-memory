@@ -1,5 +1,12 @@
 # Source provenance
 
+The account/invitation baseline below describes PR #1 before OAuth. The local
+OAuth/MCP extension starts from that PR head; its new build and validation are
+recorded separately in [公开变更与验证摘要](PUBLIC_CHANGE_SUMMARY.md).
+The separately authorized 2026-10-11 deployment is recorded in
+[公开变更与验证摘要](PUBLIC_CHANGE_SUMMARY.md); the statements
+below describe the original account/invitation PR baseline.
+
 This change starts from repository main commit
 `1a2856fd4cf807a3adfdd089bcca0f6ce793e6c2`, retaining the existing Node/SQLite
 target under `walle-memory-server/`.

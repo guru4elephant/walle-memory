@@ -1,0 +1,1 @@
+{"name":"walle-memory-workbench-ui","private":true,"type":"module","scripts":{"build":"node build.mjs"},"dependencies":{"@modelcontextprotocol/ext-apps":"2.0.3"},"devDependencies":{"esbuild":"0.25.12"}}

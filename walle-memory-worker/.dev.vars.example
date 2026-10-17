@@ -2,3 +2,7 @@
 API_KEY=REPLACE_WITH_A_LOCAL_ONLY_ADMIN_KEY
 # Optional: invite enables invitation-only registration; admin is the default.
 REGISTRATION_MODE=admin
+# Canonical origin only; OAuth/MCP fail closed when unset. Development example:
+OAUTH_ISSUER=http://localhost:8787
+# Optional JSON array of exact browser origins; server clients need no Origin.
+OAUTH_ALLOWED_ORIGINS=[]

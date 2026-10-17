@@ -5,11 +5,13 @@ A self-hosted memory service for AI agents, with two deployment targets:
 | Target | Runtime and storage | Identity and management |
 | --- | --- | --- |
 | [Docker / Node](walle-memory-server/) | Node 22, SQLite, `better-sqlite3` | Administrator-created tenants and tenant API keys. |
-| [Cloudflare Workers](walle-memory-worker/README.md) | Workers, D1, Web Crypto | Existing tenants plus accounts, owned memory spaces, scoped keys, and optional invitation registration. |
+| [Cloudflare Workers](walle-memory-worker/README.md) | Workers, D1, Web Crypto | Accounts, owned spaces, scoped keys, invitation registration, and MCP with renewable OAuth connections. |
 
 Both targets provide the memory API and dashboard at `/`. The Worker additionally provides `/account` for login, space management, and key issuance. Its default registration mode allows administrators to create accounts; setting `REGISTRATION_MODE=invite` allows registration with a valid invitation. Accounts and D1 migrations are specific to the Worker target.
 
 Each key selects one tenant or space. Clients can share a store across machines and sessions, while separate keys keep personal, team, and project stores apart. The administrator key manages resources through `/admin/`; it is not a memory key. See [accounts and spaces](docs/ACCOUNTS_AND_SPACES.md), [invitation registration](docs/INVITATION_SIGNUP.md), and [release provenance](docs/RELEASE_PROVENANCE.md).
+
+The Worker also offers `/mcp` with either OAuth authorization code + S256 PKCE or a space API key in `X-Api-Key`. OAuth connections retain selected workspaces, rotating refresh tokens and revocation in `/account`; API keys retain their single-space binding, scopes, expiry and revocation. Supplying both authentication headers is rejected. OAuth does not proxy a hidden API key. See [bot configuration and authentication rules](docs/MCP_API_KEY.md) and [MCP / OAuth setup](docs/OAUTH_MCP.md). The Node target and existing API-key REST clients keep their current authentication model.
 
 ## Memory model
 
@@ -111,3 +113,7 @@ Follow [walle-memory-worker/README.md](walle-memory-worker/README.md) for local 
 The skill supports list, get, put, search, summary, delete, and expired-entry GC. Delete and GC require an explicit local target confirmation and their respective server scopes. It rejects redirects, key arguments, and plaintext credential fallbacks. See its [setup guide](skills/walle-memory-profiles/references/setup.md) for installation and user-entered Keychain enrollment. Installation alone does not configure profile mappings or authorize saving/using real keys. A local skill does not automatically become a cloud tool; other devices need access to a task running on the Mac or a separately configured connection.
 
 The repository includes 58 standard-library mock tests under [`tests/`](tests/) for profile isolation, credential failures, sanitization, Keychain behavior, and redirect refusal. They use synthetic credentials and local HTTP fixtures. [Validation commands](docs/VALIDATION.md) cover the two service targets and skill; run them in the stated runtimes before claiming a new result.
+
+## MCP Apps 工作台候选版
+
+Walle Memory 工作台、多 workspace OAuth 授权和日常场景说明已部署到公网。实现及使用见 [工作台说明](docs/WORKBENCH_MCP_APPS.md)，本次发布与验收边界见 [公开变更与验证摘要](docs/PUBLIC_CHANGE_SUMMARY.md)。

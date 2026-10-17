@@ -107,7 +107,7 @@ dialog p { margin-top:10px; }
 <body>
 <header class="topbar"><div class="topbar-inner"><a class="brand" href="/account"><span class="brand-mark" aria-hidden="true">w</span>walle-memory</a><a class="navlink" href="/">打开记忆工作台 ↗</a></div></header>
 <main>
-  <div class="intro"><h1>账户与记忆空间</h1><p>按用途管理独立的记忆空间，为每个应用签发指定权限的 API Key。</p></div>
+  <div class="intro"><h1>账户与记忆空间</h1><p>按用途管理独立的记忆空间，查看已连接应用，或为应用签发指定权限的 API Key。</p></div>
   <div id="page-status" class="status" role="status" aria-live="polite"></div>
   <section id="auth-section" class="auth-grid">
     <div class="card">
@@ -139,6 +139,7 @@ dialog p { margin-top:10px; }
         <div class="notice section-divider">在 <a href="/">记忆工作台</a> 输入已保存的 Key 即可读写此空间。账户页不会自动把 Key 传到其他页面。旧工作台会记住输入的 Key，仅在可信设备上使用。</div>
       </div></section>
     </div>
+    <section class="card section-divider" aria-labelledby="connections-title"><div class="row spread"><h2 id="connections-title">已连接应用</h2><button id="refresh-connections" type="button">刷新连接</button></div><p class="hint">通过 OAuth 连接的应用只可访问授权空间和操作。应用名称由注册方自行填写；请同时核对应用标识和空间。撤销后需重新授权，已有记忆会保留。</p><div id="connection-list" class="key-list"></div><p id="connections-status" class="status" role="status" aria-live="polite"></p></section>
   </section>
   <details id="admin-details" class="card admin"><summary>管理员工具</summary><div class="admin-body"><p class="muted small">使用服务端管理员 Key 创建账号，或为已有租户指定账号归属。管理员 Key 每次请求后从输入框清除。</p>
     <div class="field admin-key"><label for="admin-key">管理员 Key（仅用于下一次操作）</label><input id="admin-key" type="password" autocomplete="off" spellcheck="false" maxlength="512" placeholder="X-Api-Key"><p class="hint">读取列表、创建账号、绑定空间和管理邀请码前分别输入，不会保存在浏览器存储中。</p></div>
@@ -158,8 +159,8 @@ dialog p { margin-top:10px; }
 <script>
 'use strict';
 const $ = id => document.getElementById(id);
-const state = { account:null, spaces:[], selectedId:null, authVersion:0, spacesVersion:0, keysVersion:0, secretVersion:0, secretIssuing:null, invitationsVersion:0, invitations:[], registrationMode:'admin', registering:false, keyIssuing:false, adminAccounts:[], adminTenants:[] };
-const scopeNames = { read:'读取', write:'写入', delete:'删除', gc:'清理' };
+const state = { account:null, spaces:[], selectedId:null, authVersion:0, spacesVersion:0, keysVersion:0, connectionsVersion:0, secretVersion:0, secretIssuing:null, invitationsVersion:0, invitations:[], registrationMode:'admin', registering:false, keyIssuing:false, adminAccounts:[], adminTenants:[] };
+const scopeNames = { read:'读取', write:'写入', delete:'删除', gc:'清理', 'memory:read':'读取', 'memory:write':'写入', 'memory:delete':'删除', 'memory:gc':'清理', offline_access:'自动续期' };
 let confirmation = null;
 
 function status(id, message, kind) {
@@ -227,14 +228,16 @@ function clearSecret() {
 function clearInvitations() { state.invitationsVersion++; state.invitations = []; $('invitation-list').replaceChildren(); status('invitation-status',''); }
 function closeConfirmation() { confirmation = null; if ($('confirm-dialog').open) $('confirm-dialog').close(); }
 function clearAccount() {
-  state.authVersion++; state.spacesVersion++; state.keysVersion++; state.account = null; state.spaces = []; state.selectedId = null;
+  state.authVersion++; state.spacesVersion++; state.keysVersion++; state.connectionsVersion++; state.account = null; state.spaces = []; state.selectedId = null;
   clearSecret(); clearInvitations(); closeConfirmation(); $('auth-invitation-code').value = ''; $('account-name').textContent = ''; $('account-email').textContent = ''; $('space-list').replaceChildren(); $('key-list').replaceChildren();
   $('account-section').hidden = true; $('auth-section').hidden = false;
   $('space-name').value = ''; $('key-label').value = ''; $('key-expiry').value = '';
+  $('connection-list').replaceChildren(); status('connections-status','');
   ['selected-space-name','selected-space-type','selected-space-id'].forEach(id => { $(id).textContent = ''; });
 }
 function showAccount(account) {
   clearSecret(); clearInvitations(); $('auth-invitation-code').value = '';
+  state.connectionsVersion++; $('connection-list').replaceChildren(); status('connections-status','');
   state.authVersion++; state.account = account;
   $('account-name').textContent = displayName(account); $('account-email').textContent = account.email;
   $('auth-section').hidden = true; $('account-section').hidden = false; status('page-status','');
@@ -297,6 +300,35 @@ async function loadKeys() {
 function confirmAction(title, description, task) {
   confirmation = task; $('confirm-title').textContent = title; $('confirm-description').textContent = description; $('confirm-dialog').showModal();
 }
+async function loadConnections() {
+  const version = ++state.connectionsVersion;
+  const data = await api('GET','/account/connections',undefined,undefined,true);
+  if (version !== state.connectionsVersion) throw staleError();
+  const list = $('connection-list'); list.replaceChildren();
+  const connections = Array.isArray(data.connections) ? data.connections : [];
+  if (!connections.length) { list.append(textElement('p','尚未通过 OAuth 连接应用。请在支持 MCP 的应用中添加此服务，再登录并选择空间。','empty-state')); return; }
+  connections.forEach(connection => {
+    const expired = (connection.expires_at && connection.expires_at <= Date.now()) || (connection.idle_expires_at && connection.idle_expires_at <= Date.now());
+    const inactive = Boolean(connection.revoked_at || expired);
+    const card = textElement('div','','key-card'); const title = textElement('div','','key-title');
+    title.append(textElement('strong',connection.client_name || '未命名应用'),textElement('span',connection.revoked_at ? '已撤销' : expired ? '已到期' : '已连接','badge' + (inactive ? '' : ' good')));
+    const metadata = textElement('div','','key-meta'); metadata.append(textElement('span','空间 ' + (Array.isArray(connection.spaces) && connection.spaces.length ? connection.spaces.map(space=>space.display_name || space.name || space.id).join('、') : connection.space_display_name || connection.space_name || connection.space_id)),textElement('span','权限 ' + (Array.isArray(connection.scopes) ? connection.scopes.map(scope => scopeNames[scope] || scope).join('、') : '—')));
+    const identity = textElement('div','','key-meta'); identity.append(textElement('span','应用标识 ' + connection.client_id,'key-prefix'),textElement('span','默认空间 ID ' + connection.space_id,'key-prefix'));
+    const dates = textElement('div','','key-meta'); dates.append(textElement('span','授权 ' + dateText(connection.created_at)),textElement('span','最晚到期 ' + dateText(connection.expires_at)),textElement('span','未续期到期 ' + dateText(connection.idle_expires_at)));
+    if (connection.revoked_at) dates.append(textElement('span','撤销 ' + dateText(connection.revoked_at)));
+    card.append(title,metadata,identity,dates);
+    if (!connection.revoked_at) {
+      const actions = textElement('div','','actions'); const button = textElement('button','撤销连接','danger'); button.type = 'button';
+      button.addEventListener('click',() => confirmAction('撤销此应用连接？','“' + (connection.client_name || '未命名应用') + '”对此空间的访问和自动续期将失效。需要继续使用时，请在应用中重新授权。',async () => {
+        button.disabled = true; status('connections-status','');
+        try { await api('DELETE','/account/connections/' + encodeURIComponent(connection.id),{},undefined,true); await loadConnections(); status('connections-status','连接已撤销。此应用需要重新授权才能访问空间。','success'); }
+        catch (error) { status('connections-status',errorMessage(error),'error'); } finally { button.disabled = false; }
+      })); actions.append(button); card.append(actions);
+    }
+    list.append(card);
+  });
+}
+function refreshConnections() { return loadConnections().catch(error => status('connections-status',errorMessage(error),'error')); }
 function configureAuth() {
   const registering = state.registrationMode === 'invite' && state.registering;
   $('auth-title').textContent = registering ? '使用邀请码创建账户' : '登录账户'; $('auth-submit').textContent = registering ? '创建账户并登录' : '登录';
@@ -382,7 +414,7 @@ $('auth-form').addEventListener('submit',event => {
       throw error;
     }
     finally { body.password = ''; if ('invitation_code' in body) body.invitation_code = ''; }
-    showAccount(data.account); await loadSpaces(); status('auth-status','');
+    showAccount(data.account); await Promise.all([loadSpaces(),refreshConnections()]); status('auth-status','');
   });
 });
 $('logout').addEventListener('click',() => run('logout','page-status',async () => {
@@ -391,6 +423,7 @@ $('logout').addEventListener('click',() => run('logout','page-status',async () =
 }));
 $('refresh-spaces').addEventListener('click',() => run('refresh-spaces','page-status',() => loadSpaces()));
 $('refresh-keys').addEventListener('click',() => run('refresh-keys','keys-status',() => loadKeys()));
+$('refresh-connections').addEventListener('click',() => run('refresh-connections','connections-status',() => loadConnections()));
 $('space-form').addEventListener('submit',event => {
   event.preventDefault(); run('space-submit','space-status',async () => {
     const data = await api('POST','/account/spaces',{ display_name:$('space-name').value.trim(), memory_type:$('space-type').value.trim() },undefined,true);
@@ -525,7 +558,7 @@ async function initialize() {
   if (version !== state.authVersion) return;
   if (results[1].status === 'fulfilled' && results[1].value.account) {
     showAccount(results[1].value.account);
-    try { await loadSpaces(); } catch (error) { status('page-status',errorMessage(error),'error'); }
+    try { await Promise.all([loadSpaces(),refreshConnections()]); } catch (error) { status('page-status',errorMessage(error),'error'); }
   } else if (results[1].status === 'rejected' && results[1].reason.status !== 401) status('page-status',errorMessage(results[1].reason),'error');
   if (results[0].status === 'rejected') status('auth-status','暂时无法读取注册设置，请稍后重试。','error');
 }

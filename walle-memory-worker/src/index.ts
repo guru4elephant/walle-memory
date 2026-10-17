@@ -2,11 +2,17 @@ import { getDashboardHtml } from '../../walle-memory-server/src/dashboard';
 import { MemoryStore, CredentialExpiredError, hashKey } from './store';
 import { handleAccountRequest, resolveMemoryAuth, consumeRateLimit } from './accounts';
 import { getAccountDashboardHtml } from './account-dashboard';
+import { handleOAuthRequest } from './oauth';
+import { handleMcpRequest } from './mcp';
 
 export interface Env {
   DB: D1Database;
   API_KEY?: string;
   REGISTRATION_MODE?: string;
+  /** Canonical OAuth issuer origin; required to enable OAuth and MCP. */
+  OAUTH_ISSUER?: string;
+  /** JSON array of additional exact browser origins for bearer endpoints. */
+  OAUTH_ALLOWED_ORIGINS?: string;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -91,7 +97,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   }
 
   const rawKey = request.headers.get('x-api-key') ?? '';
-  if (rawKey.length > 512) throw new HttpError(401, 'unauthorized');
+  if (path !== '/mcp' && rawKey.length > 512) throw new HttpError(401, 'unauthorized');
+  const oauthResponse = await handleOAuthRequest(request, env);
+  if (oauthResponse) return oauthResponse;
+  if (path === '/mcp') return handleMcpRequest(request, env);
   const accountResponse = await handleAccountRequest(request, env);
   if (accountResponse) return accountResponse;
   if (path.startsWith('/admin/')) {

@@ -1,5 +1,8 @@
 # Local validation
 
+For the OAuth/MCP extension, see the [implementation guide](OAUTH_MCP.md) and
+[公开变更与验证摘要](PUBLIC_CHANGE_SUMMARY.md).
+
 These commands reproduce the repository's local checks. They are instructions,
 not a record of a completed run. Record the commit, runtime versions, commands,
 and results when validating a release. No production key, account, database, or

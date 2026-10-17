@@ -1,3 +1,5 @@
+import { oauthAccessGuard } from './oauth';
+
 export interface Tenant {
   id: string;
   name: string;
@@ -22,10 +24,19 @@ export interface KeySummary {
   expires_at: number | null;
 }
 
-export interface MemoryCredential {
+type MemoryPermission = 'read' | 'write' | 'delete' | 'gc';
+
+export type MemoryCredential = {
+  // Optional for compatibility with the existing REST/API-key call sites.
+  kind?: 'api-key';
   keyHash: string;
-  requiredScope: 'read' | 'write' | 'delete' | 'gc';
-}
+  requiredScope: MemoryPermission;
+} | {
+  kind: 'oauth';
+  tokenHash: string;
+  resource: string;
+  requiredScope: MemoryPermission;
+};
 
 /** The credential changed after the router's initial authorization. */
 export class CredentialExpiredError extends Error {
@@ -50,6 +61,11 @@ export class MemoryStore {
 
   private memoryGuard(tenantId: string, now: number): { sql: string; values: unknown[] } {
     if (!this.credential) return { sql: '1', values: [] };
+    if (this.credential.kind === 'oauth') {
+      // OAuth authority is re-evaluated at D1 transaction time, rather than
+      // trusting the initial HTTP authorization or a hidden space API key.
+      return oauthAccessGuard(this.credential.tokenHash, this.credential.resource, tenantId, this.credential.requiredScope);
+    }
     const { keyHash, requiredScope } = this.credential;
     return {
       sql: `EXISTS (SELECT 1 FROM tenants authorization_t
@@ -84,6 +100,8 @@ export class MemoryStore {
     if (grant.results.length === 0) throw new CredentialExpiredError();
     return results;
   }
+
+  async checkAccess(tenantId: string): Promise<void> { await this.memoryBatch(tenantId,Date.now(),[]); }
 
   async createTenant(name: string): Promise<{ tenant: Tenant; apiKey: string }> {
     const tenant = { id: randomHex(8), name, created_at: Date.now() };
@@ -127,8 +145,23 @@ export class MemoryStore {
     await this.memoryBatch(tenantId, now, [this.db.prepare(`INSERT INTO memory (tenant_id, key, value, description, updated_at, expires_at)
       SELECT ?, ?, ?, ?, ?, ? WHERE ${guard.sql}
       ON CONFLICT(tenant_id, key) DO UPDATE SET value = excluded.value,
-      description = excluded.description, updated_at = excluded.updated_at, expires_at = excluded.expires_at`)
+      description = excluded.description, updated_at = max(memory.updated_at + 1, excluded.updated_at), expires_at = excluded.expires_at`)
       .bind(tenantId, key, value, description, now, ttlSeconds === undefined ? null : now + ttlSeconds * 1000, ...guard.values)]);
+  }
+
+  /** Edit an existing live record without extending its expiry or overwriting a newer revision. */
+  async updateExisting(tenantId: string, key: string, value: string, description: string, expectedUpdatedAt: number): Promise<Record<string, unknown>> {
+    const now = Date.now();
+    const guard = this.memoryGuard(tenantId, now);
+    const [updated, current] = await this.memoryBatch<MemoryEntry>(tenantId, now, [
+      this.db.prepare(`UPDATE memory SET value=?, description=?, updated_at=max(updated_at+1,?)
+        WHERE tenant_id=? AND key=? AND updated_at=? AND ${LIVE} AND ${guard.sql} RETURNING *`)
+        .bind(value, description, now, tenantId, key, expectedUpdatedAt, now, ...guard.values),
+      this.db.prepare(`SELECT * FROM memory WHERE tenant_id=? AND key=? AND ${LIVE} AND ${guard.sql}`)
+        .bind(tenantId, key, now, ...guard.values),
+    ]);
+    if (updated.results.length) return { ok: true, key, entry: updated.results[0] };
+    return { ok: false, key, reason: current.results.length ? 'conflict' : 'missing_or_expired' };
   }
 
   async deleteEntry(tenantId: string, key: string): Promise<boolean> {
@@ -172,6 +205,27 @@ export class MemoryStore {
         .bind(tenantId, now, ...guard.values),
     ]);
     return read.results;
+  }
+
+  async workbench(tenantId: string, options: { prefix?: string; query?: string; offset: number; limit: number }): Promise<Record<string, unknown>> {
+    const now = Date.now();
+    const guard = this.memoryGuard(tenantId, now);
+    const filter = `tenant_id=? AND ${LIVE} AND ${guard.sql}
+      AND (?='' OR substr(key,1,length(?))=?)
+      AND (?='' OR instr(lower(key || char(10) || description),lower(?))>0)`;
+    const bindings = [tenantId,now,...guard.values,options.prefix ?? '',options.prefix ?? '',options.prefix ?? '',options.query ?? '',options.query ?? ''];
+    const [count,entries,changes] = await this.memoryBatch(tenantId,now,[
+      this.db.prepare(`SELECT count(*) AS total FROM memory WHERE ${filter}`).bind(...bindings),
+      this.db.prepare(`SELECT ${SUMMARY} FROM memory WHERE ${filter} ORDER BY updated_at DESC,key LIMIT ? OFFSET ?`)
+        .bind(...bindings,options.limit,options.offset),
+      this.db.prepare(`SELECT id,key,operation,description,changed_at FROM memory_changes
+        WHERE tenant_id=? AND ${guard.sql} ORDER BY changed_at DESC,id DESC LIMIT 60`)
+        .bind(tenantId,...guard.values),
+    ]);
+    const total = (count.results[0] as { total: number }).total;
+    return { entries:entries.results,changes:changes.results,total,offset:options.offset,
+      has_more:options.offset+entries.results.length<total,refreshed_at:now,
+      history_note:'更新动态从本版上线后开始记录；已有条目仍显示最近更新时间。动态记录创建、更新、删除，不保存历史正文。' };
   }
 
   async deleteExpired(tenantId: string): Promise<number> {

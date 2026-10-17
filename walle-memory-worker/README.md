@@ -4,6 +4,8 @@ This directory is a separate deployment target alongside the existing [Docker / 
 
 The Worker adds `/account` login and management: one account can own multiple memory spaces, and each scoped key belongs to one space. Keys allow `read`, `write`, `delete`, and/or `gc`, with optional expiry and revocation. Only the creation response reveals a raw key. Registration defaults to administrator-created accounts. Only `REGISTRATION_MODE=invite` enables valid invitation registration; `public` and unknown values resolve to administrator mode. See [accounts and spaces](../docs/ACCOUNTS_AND_SPACES.md), [invitations](../docs/INVITATION_SIGNUP.md), and [release provenance](../docs/RELEASE_PROVENANCE.md).
 
+`/mcp` accepts either OAuth Bearer authorization or a space key in `X-Api-Key`. OAuth retains S256 PKCE, selected workspaces, short-lived access tokens, rotating refresh tokens and connection revocation. Keys retain their single-space binding and memory scopes, with D1 transaction checks for both methods. Sending both headers is rejected. Configure the canonical `OAUTH_ISSUER` to enable either MCP method; see [bot configuration and authentication rules](../docs/MCP_API_KEY.md) and [the MCP / OAuth guide](../docs/OAUTH_MCP.md). Existing API-key REST authentication is unchanged.
+
 ## Local development
 
 Use Node 24 LTS and npm. No Cloudflare account is needed for local development. From this directory:
@@ -46,6 +48,7 @@ Inspect the actual schema and migration history before applying anything. Back u
 - [0001_initial.sql](migrations/0001_initial.sql) creates the original tenant, memory, and FTS schema for a fresh database.
 - [0002_accounts_spaces_keys.sql](migrations/0002_accounts_spaces_keys.sql) adds accounts, sessions, scoped keys, rate-limit state, and tenant ownership metadata. Existing tenant IDs, key hashes, memory, access counters, TTL, and FTS survive. Existing tenants remain unowned with their legacy keys active until explicitly claimed or revoked; this migration does not create accounts or credentials.
 - [0003_registration_invitations.sql](migrations/0003_registration_invitations.sql) adds the invitation table and two indexes. It does not create invitations or modify existing accounts, spaces, memories, sessions, or keys.
+- [0004_oauth.sql](migrations/0004_oauth.sql) adds OAuth client, consent, grant, code, and token state. It does not create credentials or modify existing application data. Apply only this missing increment to an already upgraded database; see [OAuth migration boundaries](../docs/OAUTH_MCP.md#增量迁移与后续上线).
 
 If a schema was previously applied manually, its presence does not imply that Wrangler's `d1_migrations` history records it. Reconcile that history before using the full migration directory. Apply only missing, reviewed changes; do not replay `0001` or `0002` over existing tables, or rerun `0003` after it is present. The [account migration guide](../docs/ACCOUNTS_AND_SPACES.md#6-d1-增量迁移与回滚限制) describes preservation and rollback limits. Deployment-specific historical facts are recorded separately in [release provenance](../docs/RELEASE_PROVENANCE.md).
 

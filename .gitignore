@@ -30,3 +30,13 @@ profiles.json
 *.zip
 validation/
 .local-validation/
+
+# Publish only reviewed source paths; keep private local evidence out of Git.
+!walle-memory-worker/apps/workbench/package-lock.json
+.audit/
+audit/
+evidence/
+.deployment/
+baseline-source-hashes.json
+baseline-source-sha256.json
+*.tar.gz
