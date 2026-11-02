@@ -170,3 +170,4 @@ Single SQLite file, WAL mode. Each memory entry tracks `access_count` and
 table (kept in sync by triggers) powers `/memory/search`. No migrations
 framework — schema is created with `IF NOT EXISTS` on startup; columns added
 in later versions are applied with `ALTER TABLE` at boot.
+This repository is managed with dsh-superagent.
